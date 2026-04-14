@@ -5,4 +5,5 @@ numpy
 opencv-python==4.13.0.92
 Pillow==10.4.0
 requests==2.32.4
+gunicorn
 waitress==3.0.2
