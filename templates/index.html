@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SolarScan — AI Defect Classifier</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Design tokens ──────────────────────────────────────────────────── */
+    :root {
+      --bg:        #0b0e14;
+      --surface:   #131720;
+      --border:    #1f2738;
+      --accent:    #f5a623;
+      --accent2:   #e8563a;
+      --gemini:    #4f8ef7;
+      --gemini-bg: rgba(79,142,247,.07);
+      --gemini-bd: rgba(79,142,247,.22);
+      --text:      #e8ecf0;
+      --muted:     #6b7a8d;
+      --green:     #3ecf8e;
+      --red:       #e8563a;
+      --yellow:    #f5a623;
+      --radius:    12px;
+      --mono:      'Space Mono', monospace;
+      --sans:      'DM Sans', sans-serif;
+    }
+
+    /* ── Reset ──────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+      pointer-events: none; z-index: 0; opacity: .45;
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    .wrapper { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      padding: 30px 0 26px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 16px;
+    }
+    .logo-icon {
+      width: 42px; height: 42px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 10px;
+      display: grid; place-items: center;
+      font-size: 22px; flex-shrink: 0;
+    }
+    .brand h1 { font-family: var(--mono); font-size: 1.15rem; letter-spacing: .05em; }
+    .brand p  { font-size: .73rem; color: var(--muted); margin-top: 2px; }
+    .pills { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .pill {
+      font-family: var(--mono); font-size: .68rem;
+      padding: 4px 12px; border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted); display: flex; align-items: center; gap: 6px;
+    }
+    .pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    .pill.ready   { color: var(--green);  border-color: rgba(62,207,142,.3); }
+    .pill.ready .dot  { box-shadow: 0 0 6px var(--green); }
+    .pill.ai      { color: var(--gemini); border-color: var(--gemini-bd); }
+    .pill.ai .dot     { box-shadow: 0 0 6px var(--gemini); }
+    .pill.warn    { color: var(--yellow); border-color: rgba(245,166,35,.3); }
+
+    /* ── Two-column main ────────────────────────────────────────────────── */
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 24px 0 0; }
+    @media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+
+    /* ── Multi-result container ─────────────────────────────────────────── */
+    #multiResultContainer {
+      display: none;
+      margin-top: 20px;
+    }
+    #multiResultContainer.show {
+      display: block;
+    }
+    .result-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .result-card-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      overflow: hidden;
+    }
+    .result-card-item-title {
+      font-family: var(--mono);
+      font-size: .7rem;
+      color: var(--muted);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .result-card-item-label {
+      font-size: 1.3rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+      word-break: break-word;
+    }
+    .result-card-item-label.low {
+      color: var(--yellow);
+    }
+    .result-card-item-conf {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: .85rem;
+      margin-bottom: 12px;
+    }
+    .result-card-item-conf-bar {
+      flex: 1;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .result-card-item-conf-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width .3s ease;
+    }
+    .result-card-item-conf-fill.high {
+      background: var(--green);
+    }
+    .result-card-item-conf-fill.medium {
+      background: var(--yellow);
+    }
+    .result-card-item-conf-fill.low {
+      background: var(--red);
+    }
+    .result-card-item-pct {
+      font-family: var(--mono);
+      font-size: .8rem;
+      font-weight: 600;
+      min-width: 40px;
+      text-align: right;
+    }
+    .result-card-item-img {
+      width: 100%;
+      height: 160px;
+      border-radius: 6px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      margin-top: 8px;
+    }
+    .result-card-item-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+    .result-card-item-actions button {
+      font-size: .7rem;
+      padding: 4px 10px;
+      flex: 1;
+      min-width: fit-content;
+    }
+
+    /* ── Panel ──────────────────────────────────────────────────────────── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .ph { padding: 14px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .ph-title { font-family: var(--mono); font-size: .7rem; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+    .pb { padding: 20px; }
+
+    /* ── Drop Zone ──────────────────────────────────────────────────────── */
+    .drop-zone {
+      border: 2px dashed var(--border); border-radius: 10px;
+      min-height: 256px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+      cursor: pointer; transition: border-color .2s, background .2s;
+      background: rgba(255,255,255,.012); overflow: hidden; position: relative;
+    }
+    .drop-zone:hover, .drop-zone.over { border-color: var(--accent); background: rgba(245,166,35,.04); }
+    .drop-zone input { display: none; }
+    .dz-icon  { font-size: 2.4rem; opacity: .45; }
+    .dz-text  { font-size: .85rem; color: var(--muted); text-align: center; line-height: 1.55; }
+    .dz-text strong { color: var(--accent); font-weight: 600; cursor: pointer; }
+    .dz-text strong:hover { text-decoration: underline; }
+    .dz-hint  { font-size: .7rem; color: var(--muted); opacity: .7; }
+    .drop-zone.has-imgs .dz-content { display: none; }
+
+    /* ── File list grid ─────────────────────────────────────────────────── */
+    #fileListContainer {
+      display: none;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .file-list-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+      gap: 8px;
+    }
+    .file-item {
+      position: relative;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      aspect-ratio: 1;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .file-item:hover { border-color: var(--accent); }
+    .file-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .file-item-remove {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 20px;
+      height: 20px;
+      background: rgba(232,86,58,.8);
+      color: white;
+      border: none;
+      border-radius: 3px;
+      font-size: .7rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity .2s;
+    }
+    .file-item:hover .file-item-remove { opacity: 1; }
+    .file-count {
+      font-size: .75rem;
+      color: var(--muted);
+      padding: 8px 12px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+    }
+
+    /* ── Buttons ────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      padding: 11px 22px; border-radius: 8px; border: none; cursor: pointer;
+      font-family: var(--sans); font-size: .875rem; font-weight: 600;
+      transition: all .18s; white-space: nowrap; text-decoration: none;
+    }
+    .btn-primary { background: var(--accent); color: #0b0e14; }
+    .btn-primary:hover:not(:disabled) { background: #fbb83e; transform: translateY(-1px); box-shadow: 0 4px 18px rgba(245,166,35,.35); }
+    .btn-primary:disabled { opacity: .38; cursor: not-allowed; }
+    .btn-ghost   { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled) { color: var(--text); border-color: #3a4558; }
+    .btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-ai { background: var(--gemini-bg); color: var(--gemini); border: 1px solid var(--gemini-bd); }
+    .btn-ai:hover:not(:disabled) { background: rgba(79,142,247,.14); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(79,142,247,.2); }
+    .btn-ai:disabled { opacity: .35; cursor: not-allowed; }
+    .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+
+    /* ── Spinner ────────────────────────────────────────────────────────── */
+    .spin {
+      width: 15px; height: 15px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,.18); border-top-color: currentColor;
+      animation: rot .7s linear infinite; display: none;
+    }
+    .btn.busy .spin { display: block; }
+    .btn.busy .lbl  { display: none; }
+    @keyframes rot { to { transform: rotate(360deg); } }
+
+    /* ── Result panel: preprocessed image ─────────────────────────────── */
+    .img-placeholder {
+      min-height: 256px; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 10px;
+      color: var(--muted); font-size: .82rem; text-align: center;
+    }
+    .img-placeholder span { font-size: 2rem; opacity: .28; }
+    #procImg { display: none; width: 100%; border-radius: 8px; border: 1px solid var(--border); }
+    #procImg.show { display: block; }
+
+    /* ── Classification result card ─────────────────────────────────────── */
+    #resultCard { display: none; margin-top: 20px; }
+    #resultCard.show { display: block; }
+
+    .result-main {
+      padding: 22px 24px;
+      display: flex; align-items: center; gap: 20px;
+      flex-wrap: wrap;
+    }
+    .result-label-block { flex: 1; min-width: 160px; }
+    .result-tag {
+      font-family: var(--mono); font-size: .66rem; color: var(--muted);
+      letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px;
+    }
+    .result-label { font-size: 1.55rem; font-weight: 600; letter-spacing: -.01em; }
+    .result-label.low { color: var(--yellow); }
+    .result-label.ok  { color: var(--text); }
+
+    /* Confidence ring */
+    .conf-ring-wrap { position: relative; width: 90px; height: 90px; flex-shrink: 0; }
+    .conf-ring-wrap svg { transform: rotate(-90deg); }
+    .conf-ring-bg   { fill: none; stroke: var(--border); stroke-width: 7; }
+    .conf-ring-fill { fill: none; stroke-width: 7; stroke-linecap: round; transition: stroke-dashoffset .6s ease; }
+    .conf-ring-fill.high   { stroke: var(--green); }
+    .conf-ring-fill.medium { stroke: var(--yellow); }
+    .conf-ring-fill.low    { stroke: var(--red); }
+    .conf-center {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+    }
+    .conf-pct  { font-family: var(--mono); font-size: 1rem; font-weight: 700; line-height: 1; }
+    .conf-sub  { font-size: .6rem; color: var(--muted); margin-top: 2px; }
+
+    /* Low-confidence banner */
+    .low-conf-banner {
+      margin: 0 20px 16px; padding: 10px 14px; border-radius: 8px;
+      background: rgba(245,166,35,.07);
+      border: 1px solid rgba(245,166,35,.25);
+      font-size: .8rem; color: var(--yellow); display: flex; align-items: center; gap: 8px;
+    }
+
+    /* Preprocessing badge row */
+    .preproc-badges {
+      padding: 10px 24px 16px;
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    .badge {
+      font-family: var(--mono); font-size: .63rem;
+      padding: 3px 10px; border-radius: 4px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid var(--border); color: var(--muted);
+      display: flex; align-items: center; gap: 5px;
+    }
+    .badge-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+    .badge-green  .badge-dot { background: var(--green); }
+    .badge-blue   .badge-dot { background: var(--gemini); }
+    .badge-yellow .badge-dot { background: var(--yellow); }
+
+    /* ── AI explanation panel ───────────────────────────────────────────── */
+    #aiPanel { display: none; margin-top: 20px; margin-bottom: 32px; }
+    #aiPanel.show { display: block; }
+
+    .ai-header-row {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+    }
+    .ai-powered-tag {
+      font-family: var(--mono); font-size: .65rem; color: var(--gemini);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .ai-powered-tag .gem-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--gemini);
+      box-shadow: 0 0 6px var(--gemini);
+    }
+    .ai-loading  { padding: 24px; text-align: center; color: var(--muted); font-size: .82rem; }
+    .ai-error-msg { padding: 16px 20px; color: var(--red); font-size: .82rem; }
+
+    /* Sections grid */
+    .ai-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--border); }
+    @media (max-width: 580px) { .ai-sections { grid-template-columns: 1fr; } }
+    .ai-section  { background: var(--surface); padding: 18px 20px; }
+    .ai-section.full { grid-column: 1 / -1; }
+    .ai-sec-title {
+      font-family: var(--mono); font-size: .63rem; color: var(--gemini);
+      letter-spacing: .07em; text-transform: uppercase; margin-bottom: 8px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .ai-sec-body { font-size: .83rem; color: var(--text); line-height: 1.65; white-space: pre-wrap; }
+
+    /* Urgency badge */
+    .urgency-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-family: var(--mono); font-size: .72rem;
+      padding: 4px 12px; border-radius: 5px; margin-top: 4px;
+    }
+    .u-low      { background: rgba(62,207,142,.1);  color: var(--green);  border: 1px solid rgba(62,207,142,.25); }
+    .u-medium   { background: rgba(245,166,35,.1);  color: var(--yellow); border: 1px solid rgba(245,166,35,.25); }
+    .u-high     { background: rgba(232,86,58,.1);   color: var(--red);    border: 1px solid rgba(232,86,58,.25); }
+    .u-critical { background: rgba(232,86,58,.18);  color: var(--red);    border: 1px solid var(--red); }
+
+    /* Re-explain button inside AI panel */
+    .btn-reexplain {
+      font-family: var(--mono); font-size: .7rem;
+      padding: 5px 14px; border-radius: 6px;
+      border: 1px solid var(--gemini-bd);
+      background: var(--gemini-bg); color: var(--gemini);
+      cursor: pointer; transition: all .15s;
+    }
+    .btn-reexplain:hover { background: rgba(79,142,247,.16); }
+    .btn-reexplain:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── Toast ──────────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+      background: #1e1018; border: 1px solid rgba(232,86,58,.4);
+      color: var(--red); padding: 12px 22px; border-radius: 8px;
+      font-size: .82rem; transition: transform .3s ease; z-index: 999;
+      max-width: 400px; text-align: center;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="logo-icon">☀️</div>
+    <div class="brand">
+      <h1>SolarScan</h1>
+      <p>YOLO Classification · Image Preprocessing · Gemini AI · v3.0</p>
+    </div>
+    <div class="pills">
+      <div class="pill" id="modelPill"><span class="dot"></span><span id="modelTxt">checking…</span></div>
+      <div class="pill" id="geminiPill"><span class="dot"></span><span id="geminiTxt">Gemini…</span></div>
+    </div>
+  </header>
+
+  <!-- ── Upload + Preprocessed result ───────────────────────────────────── -->
+  <main>
+
+    <!-- Left: upload -->
+    <div class="panel">
+      <div class="ph">
+        <span class="ph-title">01 / Upload Images</span>
+        <span id="fnameBadge" style="font-size:.68rem;color:var(--muted);font-family:var(--mono)"></span>
+      </div>
+      <div class="pb">
+        <div class="drop-zone" id="dz">
+          <div class="dz-content" style="display:flex;flex-direction:column;align-items:center;gap:12px;">
+            <div class="dz-icon">🖼️</div>
+            <div class="dz-text">Drop solar panel images here<br>or <strong id="browseBtn">browse files</strong></div>
+            <div class="dz-hint">PNG · JPG · WEBP · BMP · max 16 MB each · Multiple files OK</div>
+          </div>
+        </div>
+        <div id="fileListContainer">
+          <div class="file-list-grid" id="fileListGrid"></div>
+          <div class="file-count" id="fileCount"></div>
+        </div>
+        <input type="file" id="fileIn" accept=".png,.jpg,.jpeg,.webp,.bmp" multiple />
+        <div class="actions">
+          <button class="btn btn-primary" id="runBtn" disabled>
+            <span class="spin"></span>
+            <span class="lbl">⚡ Classify All</span>
+          </button>
+          <button class="btn btn-ghost" id="clearBtn">Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: upload info -->
+    <div class="panel">
+      <div class="ph">
+        <span class="ph-title">02 / Upload Info</span>
+        <span style="font-size:.65rem;color:var(--muted);font-family:var(--mono)">Preview · Statistics</span>
+      </div>
+      <div class="pb">
+        <div class="img-placeholder" id="infoPH">
+          <span>📊</span>
+          <div>Select images to see upload statistics</div>
+        </div>
+        <div id="uploadStats" style="display:none;">
+          <div style="margin-bottom: 12px;">
+            <div style="font-size: .75rem; color: var(--muted); margin-bottom: 4px;">Total Files</div>
+            <div style="font-size: 1.8rem; font-weight: 600;" id="statFileCount">0</div>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <div style="font-size: .75rem; color: var(--muted); margin-bottom: 4px;">Total Size</div>
+            <div style="font-size: 1.1rem; font-weight: 500;" id="statTotalSize">0 MB</div>
+          </div>
+          <div style="margin-bottom: 12px;">
+            <div style="font-size: .75rem; color: var(--muted); margin-bottom: 4px;">Status</div>
+            <div style="font-size: .9rem; color: var(--green);" id="statStatus">Ready</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ── Classification results (grid layout) ────────────────────────────── -->
+  <div id="multiResultContainer">
+    <div class="panel">
+      <div class="ph">
+        <span class="ph-title">03 / Classification Results</span>
+        <span style="font-size:.65rem;color:var(--muted);font-family:var(--mono)" id="resultCountBadge">0 results</span>
+      </div>
+      <div class="pb">
+        <div class="result-cards-grid" id="resultCardsGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Gemini AI Analysis panel (single/selected) ──────────────────────────────────────────  -->
+  <div class="panel" id="aiPanel" style="margin-top:20px;margin-bottom:32px;display:none;">
+    <div class="ph">
+      <span class="ph-title">04 / Gemini AI Analysis</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="ai-powered-tag"><span class="gem-dot"></span>gemini-1.5-flash</div>
+        <button class="btn-reexplain" id="reExplainBtn" disabled>↺ Re-analyse</button>
+      </div>
+    </div>
+    <div id="aiBody">
+      <div class="ai-loading" id="aiLoading" style="display:none;">
+        <div style="margin-bottom:8px;">✦ Asking Gemini…</div>
+        <div style="font-size:.75rem;opacity:.6;">This takes a few seconds</div>
+      </div>
+      <div class="ai-error-msg" id="aiError" style="display:none;"></div>
+      <div class="ai-sections" id="aiSections" style="display:none;"></div>
+    </div>
+  </div>
+
+</div><!-- /wrapper -->
+<div id="toast"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   SolarScan v3.0  —  Multi-Image Classification UI
+   Updated to support batch processing of multiple solar panel images
+═══════════════════════════════════════════════════════════════════════════ */
+
+// ── Refs ───────────────────────────────────────────────────────────────────
+const dz                    = document.getElementById('dz');
+const fileIn                = document.getElementById('fileIn');
+const browseBtn             = document.getElementById('browseBtn');
+const runBtn                = document.getElementById('runBtn');
+const clearBtn              = document.getElementById('clearBtn');
+const fnameBadge            = document.getElementById('fnameBadge');
+const modelPill             = document.getElementById('modelPill');
+const modelTxt              = document.getElementById('modelTxt');
+const geminiPill             = document.getElementById('geminiPill');
+const geminiTxt             = document.getElementById('geminiTxt');
+const infoPH                = document.getElementById('infoPH');
+const uploadStats           = document.getElementById('uploadStats');
+const statFileCount         = document.getElementById('statFileCount');
+const statTotalSize         = document.getElementById('statTotalSize');
+const statStatus            = document.getElementById('statStatus');
+const fileListContainer     = document.getElementById('fileListContainer');
+const fileListGrid          = document.getElementById('fileListGrid');
+const fileCount             = document.getElementById('fileCount');
+const multiResultContainer  = document.getElementById('multiResultContainer');
+const resultCardsGrid       = document.getElementById('resultCardsGrid');
+const resultCountBadge      = document.getElementById('resultCountBadge');
+const aiPanel               = document.getElementById('aiPanel');
+const aiLoading             = document.getElementById('aiLoading');
+const aiError               = document.getElementById('aiError');
+const aiSections            = document.getElementById('aiSections');
+const reExplainBtn          = document.getElementById('reExplainBtn');
+const toast                 = document.getElementById('toast');
+
+// State
+let selectedFiles = [];
+let resultsData = {};
+let lastSelectedIndex = null;
+
+// ── Health check ─────────────────────────────────────────────────────────
+(async () => {
+  try {
+    const d = await fetch('/health').then(r => r.json());
+    if (d.model_loaded) { modelPill.classList.add('ready'); modelTxt.textContent = 'Model ready'; }
+    else                { modelPill.classList.add('warn');  modelTxt.textContent = 'No model'; }
+    if (d.gemini_configured) { geminiPill.classList.add('ai'); geminiTxt.textContent = 'Gemini ready'; }
+    else                     { geminiPill.classList.add('warn'); geminiTxt.textContent = 'No API key'; }
+  } catch { modelTxt.textContent = 'Offline'; }
+})();
+
+// ── File handling ─────────────────────────────────────────────────────────
+function handleFiles(files) {
+  if (!files || files.length === 0) return;
+  
+  const newFiles = Array.from(files).filter(f => {
+    if (!['image/png','image/jpeg','image/webp','image/bmp'].includes(f.type)) {
+      showToast(`Unsupported: ${f.name}`); return false;
+    }
+    return true;
+  });
+
+  selectedFiles = newFiles;
+  resultsData = {};
+  lastSelectedIndex = null;
+  updateFileList();
+  updateUploadInfo();
+}
+
+function updateFileList() {
+  if (selectedFiles.length === 0) {
+    fileListContainer.style.display = 'none';
+    dz.classList.remove('has-imgs');
+    runBtn.disabled = true;
+    return;
+  }
+
+  dz.classList.add('has-imgs');
+  runBtn.disabled = false;
+  fileListContainer.style.display = 'block';
+  fileListGrid.innerHTML = '';
+
+  selectedFiles.forEach((file, idx) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const item = document.createElement('div');
+      item.className = 'file-item';
+      item.innerHTML = `
+        <img src="${e.target.result}" alt="preview" />
+        <button class="file-item-remove" data-idx="${idx}">✕</button>
+      `;
+      item.addEventListener('click', () => {
+        lastSelectedIndex = idx;
+        updateFileList(); // Highlight selected
+      });
+      item.querySelector('.file-item-remove').addEventListener('click', (e) => {
+        e.stopPropagation();
+        selectedFiles.splice(idx, 1);
+        delete resultsData[idx];
+        updateFileList();
+        updateUploadInfo();
+      });
+      fileListGrid.appendChild(item);
+    };
+    reader.readAsDataURL(file);
+  });
+
+  fnameBadge.textContent = `${selectedFiles.length} file${selectedFiles.length !== 1 ? 's' : ''}`;
+  fileCount.textContent = `${selectedFiles.length} image${selectedFiles.length !== 1 ? 's' : ''} selected`;
+}
+
+function updateUploadInfo() {
+  if (selectedFiles.length === 0) {
+    infoPH.style.display = 'flex';
+    uploadStats.style.display = 'none';
+    return;
+  }
+
+  infoPH.style.display = 'none';
+  uploadStats.style.display = 'block';
+
+  const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+  statFileCount.textContent = selectedFiles.length;
+  statTotalSize.textContent = (totalSize / (1024 * 1024)).toFixed(2) + ' MB';
+  statStatus.textContent = 'Ready to classify';
+}
+
+browseBtn.addEventListener('click', () => fileIn.click());
+fileIn.addEventListener('change', e => handleFiles(e.target.files));
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+dz.addEventListener('drop', e => { 
+  e.preventDefault(); 
+  dz.classList.remove('over'); 
+  handleFiles(e.dataTransfer.files); 
+});
+dz.addEventListener('click', e => { if (e.target === dz || e.target === dz.querySelector('.dz-content')) fileIn.click(); });
+
+// ── Clear ─────────────────────────────────────────────────────────────────
+clearBtn.addEventListener('click', () => {
+  fileIn.value = '';
+  selectedFiles = [];
+  resultsData = {};
+  lastSelectedIndex = null;
+  updateFileList();
+  updateUploadInfo();
+  multiResultContainer.classList.remove('show');
+  aiPanel.style.display = 'none';
+  fnameBadge.textContent = '';
+});
+
+// ── Batch Classify ────────────────────────────────────────────────────────
+runBtn.addEventListener('click', async () => {
+  if (selectedFiles.length === 0) return;
+  busy(runBtn, true);
+  statStatus.textContent = 'Classifying...';
+
+  const formData = new FormData();
+  selectedFiles.forEach((file) => {
+    formData.append('images', file); // Keep original filename with extension
+  });
+
+  try {
+    const res = await fetch('/predict', { method: 'POST', body: formData });
+    const data = await res.json();
+    
+    if (!res.ok || data.error) { 
+      showToast(data.error || 'Classification failed'); 
+      statStatus.textContent = 'Error';
+      return; 
+    }
+
+    // Store results keyed by file index
+    if (data.results && Array.isArray(data.results)) {
+      data.results.forEach((result, idx) => {
+        resultsData[idx] = result;
+      });
+    }
+
+    renderMultiResults();
+    statStatus.textContent = '✅ Classification complete';
+
+  } catch (err) {
+    showToast('Network error: ' + err.message);
+    statStatus.textContent = 'Error';
+  } finally {
+    busy(runBtn, false);
+  }
+});
+
+// ── Render multiple results ───────────────────────────────────────────────
+function renderMultiResults() {
+  if (Object.keys(resultsData).length === 0) {
+    multiResultContainer.classList.remove('show');
+    return;
+  }
+
+  multiResultContainer.classList.add('show');
+  resultCardsGrid.innerHTML = '';
+  resultCountBadge.textContent = `${Object.keys(resultsData).length} result${Object.keys(resultsData).length !== 1 ? 's' : ''}`;
+
+  Object.keys(resultsData).forEach(idx => {
+    const result = resultsData[idx];
+    const isSelected = idx == lastSelectedIndex;
+    const card = createResultCard(idx, result, isSelected);
+    resultCardsGrid.appendChild(card);
+  });
+}
+
+function createResultCard(idx, result, isSelected) {
+  const card = document.createElement('div');
+  card.className = 'result-card-item' + (isSelected ? ' selected' : '');
+  card.style.borderColor = isSelected ? 'var(--accent)' : 'var(--border)';
+
+  // Check if result has an error
+  if (result.error || !result.success) {
+    card.innerHTML = `
+      <div class="result-card-item-title">Image ${parseInt(idx) + 1}</div>
+      <div style="color: var(--red); font-size: .85rem; margin-top: 8px;">
+        ⚠ ${esc(result.error || 'Classification failed')}
+      </div>
+    `;
+    return card;
+  }
+
+  const confValue = result.confidence || 0;
+  const confClass = confValue >= 75 ? 'high' : confValue >= 50 ? 'medium' : 'low';
+  const label = result.low_confidence ? `${result.label} (low)` : result.label;
+  const top2 = Array.isArray(result.top_predictions) ? result.top_predictions.slice(0, 2) : [];
+
+  card.innerHTML = `
+    <div class="result-card-item-title">Image ${parseInt(idx) + 1}</div>
+    <div class="result-card-item-label ${result.low_confidence ? 'low' : ''}">${esc(label)}</div>
+    <div class="result-card-item-conf">
+      <div class="result-card-item-conf-bar">
+        <div class="result-card-item-conf-fill ${confClass}" style="width: ${confValue}%"></div>
+      </div>
+      <div class="result-card-item-conf-pct">${confValue.toFixed(1)}%</div>
+    </div>
+    ${top2.length > 1 ? `<div style="font-size:.82rem;color:var(--muted);margin-bottom:8px;">Top 2: ${esc(top2[0].label)} ${top2[0].confidence.toFixed(1)}%, ${esc(top2[1].label)} ${top2[1].confidence.toFixed(1)}%</div>` : ''}
+    ${result.preprocessed_img ? `<img class="result-card-item-img" src="${result.preprocessed_img}" alt="preprocessed" />` : ''}
+    <div class="result-card-item-actions">
+      <button class="btn btn-ai" id="explainBtn_${idx}">📖 Explain</button>
+    </div>
+  `;
+
+  card.addEventListener('click', () => {
+    lastSelectedIndex = idx;
+    renderMultiResults(); // Re-render for highlight
+  });
+
+  card.querySelector(`#explainBtn_${idx}`).addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (result.label && result.label !== 'Unknown') {
+      explainDefect(idx, result.label, result.confidence);
+    } else {
+      showToast('Cannot explain failed classification');
+    }
+  });
+
+  return card;
+}
+
+// ── Explain defect (Gemini) ───────────────────────────────────────────────
+async function explainDefect(idx, label, conf) {
+  if (!label) {
+    showToast('Invalid defect label');
+    return;
+  }
+  
+  lastSelectedIndex = idx;
+  aiPanel.style.display = 'block';
+  showAiLoading(true);
+
+  try {
+    const payload = { defect_name: String(label).trim(), confidence: Number(conf) || 0 };
+    console.log('Explain request:', payload); // Debug log
+    
+    const res = await fetch('/explain_defect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      showAiError(errData.error || `Server error: ${res.status}`);
+      return;
+    }
+    
+    const data = await res.json();
+    renderAiSections(data);
+  } catch (err) {
+    showAiError('Network error: ' + err.message);
+    console.error('Explain defect error:', err);
+  }
+}
+
+// ── Re-explain button ─────────────────────────────────────────────────────
+reExplainBtn.addEventListener('click', async () => {
+  if (lastSelectedIndex === null || !resultsData[lastSelectedIndex]) return;
+  const result = resultsData[lastSelectedIndex];
+  
+  if (!result.label) {
+    showToast('Invalid result data');
+    return;
+  }
+  
+  reExplainBtn.disabled = true;
+  showAiLoading(true);
+  try {
+    const payload = { defect_name: String(result.label).trim(), confidence: Number(result.confidence) || 0 };
+    
+    const res = await fetch('/explain_defect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      showAiError(errData.error || `Server error: ${res.status}`);
+      return;
+    }
+    
+    const data = await res.json();
+    renderAiSections(data);
+  } catch (err) {
+    showAiError('Network error: ' + err.message);
+    console.error('Re-explain error:', err);
+  } finally {
+    reExplainBtn.disabled = false;
+  }
+});
+
+// ── Render Gemini sections ────────────────────────────────────────────────
+function renderAiSections(data) {
+  showAiLoading(false);
+  aiError.style.display = 'none';
+
+  if (!data.success) {
+    showAiError(data.error || 'Unknown Gemini error');
+    return;
+  }
+
+  const s = data.sections || {};
+  const urgencyText = (s.urgency || '').toLowerCase();
+  let urgencyClass = 'u-low';
+  if (urgencyText.startsWith('critical')) urgencyClass = 'u-critical';
+  else if (urgencyText.startsWith('high'))   urgencyClass = 'u-high';
+  else if (urgencyText.startsWith('medium')) urgencyClass = 'u-medium';
+
+  function sec(cls, icon, title, body, full) {
+    if (!body) return '';
+    return `
+      <div class="ai-section${full ? ' full' : ''}">
+        <div class="ai-sec-title">${icon} ${title}</div>
+        <div class="ai-sec-body ${cls}">${esc(body)}</div>
+      </div>`;
+  }
+
+  const urgencyBadge = s.urgency
+    ? `<span class="urgency-badge ${urgencyClass}">${esc(s.urgency)}</span>`
+    : '';
+
+  const structuredOutput =
+    sec('', '📋', 'WHAT IT IS',            s.what_it_is, false) +
+    sec('', '⚙️', 'CAUSES',                s.causes,     false) +
+    sec('', '📉', 'IMPACT ON PERFORMANCE', s.impact,     false) +
+    sec('', '🔧', 'RECOMMENDED SOLUTION',  s.solution,   false) +
+    (s.urgency ? `<div class="ai-section full">
+      <div class="ai-sec-title">🚨 URGENCY LEVEL</div>
+      <div class="ai-sec-body">${urgencyBadge}</div>
+    </div>` : '');
+
+  const rawExplanation = String(data.explanation || '').trim();
+  if (!structuredOutput.trim() && rawExplanation) {
+    aiSections.innerHTML = `
+      <div class="ai-section full">
+        <div class="ai-sec-title">📝 Gemini response</div>
+        <div class="ai-sec-body">${esc(rawExplanation)}</div>
+      </div>`;
+  } else {
+    aiSections.innerHTML = structuredOutput || `
+      <div class="ai-section full">
+        <div class="ai-sec-title">📝 Gemini response</div>
+        <div class="ai-sec-body">${esc(rawExplanation || 'No explanation returned.')}</div>
+      </div>`;
+  }
+
+  aiSections.style.display = 'grid';
+  reExplainBtn.disabled = false;
+}
+
+// ── AI panel helpers ──────────────────────────────────────────────────────
+function showAiLoading(on) {
+  aiLoading.style.display = on ? 'block' : 'none';
+  aiSections.style.display = on ? 'none'  : 'grid';
+}
+function showAiError(msg) {
+  showAiLoading(false);
+  aiSections.style.display = 'none';
+  aiError.style.display = 'block';
+  aiError.textContent = '⚠ ' + msg;
+}
+
+// ── Generic helpers ───────────────────────────────────────────────────────
+function busy(btn, on) {
+  if (on) { btn.classList.add('busy'); btn.disabled = true; }
+  else    { btn.classList.remove('busy'); btn.disabled = false; }
+}
+function esc(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function showToast(msg) {
+  toast.textContent = '⚠ ' + msg;
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 4000);
+}
+</script>
+</body>
+</html>
