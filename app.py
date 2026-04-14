@@ -341,8 +341,14 @@ load_model()
 if __name__ == "__main__":
     try:
         from waitress import serve
-        print("🚀 Starting with Waitress (production server)...")
-        serve(app, host="0.0.0.0", port=5000, threads=8)
+        import os
+
+        port = int(os.environ.get("PORT", 5000))
+
+        print(f"🚀 Starting with Waitress on port {port}...")
+        serve(app, host="0.0.0.0", port=port, threads=8)
+
     except ImportError:
         print("⚠️  Waitress not installed. Using Flask dev server.")
         app.run(debug=False, host="0.0.0.0", port=5000)
+ 
