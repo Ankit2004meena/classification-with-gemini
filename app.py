@@ -49,6 +49,12 @@ os.makedirs("uploads", exist_ok=True)
 # ── YOLO model (loaded once) ──────────────────────────────────────────────────
 model = None
 
+@app.before_request
+def load_model_if_needed():
+    global model
+    if model is None and request.endpoint == 'predict':
+        model = YOLO(MODEL_PATH)
+
 def load_model() -> None:
     global model
 
