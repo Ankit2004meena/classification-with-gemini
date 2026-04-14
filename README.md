@@ -35,7 +35,15 @@ Edit `.env`:
 GEMINI_API_KEY=AIzaSy...your_actual_key...
 ```
 
-### 4. Install dependencies
+### 4. Enable auto-download on Render (optional)
+If you want Render to fetch the model automatically instead of committing `model/best.pt`, add:
+```
+MODEL_DOWNLOAD_URL=https://drive.google.com/file/d/<FILE_ID>/view?usp=sharing
+```
+
+If `model/best.pt` is missing at startup, the app will download it from the configured Google Drive link.
+
+### 5. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
