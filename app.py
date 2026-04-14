@@ -30,7 +30,6 @@ from ultralytics import YOLO
 load_dotenv()
 
 from gemini_helper import get_defect_explanation, is_api_key_configured  # noqa: E402
-from download_model import ensure_model_downloaded  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)
@@ -40,7 +39,6 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024   # 16 MB
 
 MODEL_PATH         = "model/best.pt"
-MODEL_DOWNLOAD_URL = os.getenv("MODEL_DOWNLOAD_URL", "").strip()
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "bmp"}
 CONF_THRESHOLD     = 0.50   # below this → "Low confidence" + skip Gemini
 
@@ -57,21 +55,11 @@ def load_model_if_needed():
 
 def load_model() -> None:
     global model
-
-    if not os.path.exists(MODEL_PATH) and MODEL_DOWNLOAD_URL:
-        log.info("⬇️  Model missing; downloading from Google Drive")
-        try:
-            downloaded = ensure_model_downloaded(MODEL_PATH, MODEL_DOWNLOAD_URL)
-            if downloaded:
-                log.info("✅  Model downloaded to %s", MODEL_PATH)
-        except Exception as exc:
-            log.error("❌  Model download failed: %s", exc)
-
     if os.path.exists(MODEL_PATH):
         model = YOLO(MODEL_PATH)
         log.info("✅  YOLO model loaded from %s", MODEL_PATH)
     else:
-        log.warning("⚠️  Model not found at %s — place best.pt there or set MODEL_DOWNLOAD_URL.", MODEL_PATH)
+        log.error("❌  Model not found at %s. Please place your best.pt file in the model/ directory.", MODEL_PATH)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
